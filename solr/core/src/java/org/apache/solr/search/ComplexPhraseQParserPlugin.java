@@ -70,13 +70,26 @@ public class ComplexPhraseQParserPlugin extends QParserPlugin {
       protected org.apache.lucene.search.Query getWildcardQuery(String field, String termStr) throws SyntaxError {
         return super.getWildcardQuery(field, termStr);
       }
-      
+
       @Override
-      protected org.apache.lucene.search.Query getRangeQuery(String field, String part1, String part2,
-          boolean startInclusive, boolean endInclusive) throws SyntaxError {
-        return super.getRangeQuery(field, part1, part2, startInclusive, endInclusive);
+      protected org.apache.lucene.search.Query getFuzzyQuery(String field, String termStr, float minSimilarity) throws SyntaxError {
+        return super.getFuzzyQuery(field, termStr, minSimilarity);
       }
-      
+
+      @Override
+      protected org.apache.lucene.search.Query getPrefixQuery(String field, String termStr) throws SyntaxError {
+        return super.getPrefixQuery(field, termStr);
+      }
+
+      @Override
+      protected org.apache.lucene.search.Query getRegexpQuery(String field, String termStr) throws SyntaxError {
+        return super.getRegexpQuery(field, termStr);
+      }
+
+      protected String analyzeIfMultitermTermText(String field, String termStr) {
+        return super.analyzeIfMultitermTermText(field, termStr, schema.getFieldType(field));
+      }
+
       @Override
       protected boolean isRangeShouldBeProtectedFromReverse(String field, String part1) {
         return super.isRangeShouldBeProtectedFromReverse(field, part1);
@@ -135,16 +148,51 @@ public class ComplexPhraseQParserPlugin extends QParserPlugin {
                 }
                 return query;
               }
-              
+
               protected Query newRangeQuery(String field, String part1, String part2, boolean startInclusive,
                   boolean endInclusive) {
+                part1 = reverseAwareParser.analyzeIfMultitermTermText(field, part1);
+                part2 = reverseAwareParser.analyzeIfMultitermTermText(field, part2);
                 boolean reverse = reverseAwareParser.isRangeShouldBeProtectedFromReverse(field, part1);
-                return super.newRangeQuery(field, 
+                return super.newRangeQuery(field,
                                             reverse ? reverseAwareParser.getLowerBoundForReverse() : part1, 
                                             part2,
                                             startInclusive || reverse, 
                                             endInclusive);
               }
+
+            @Override
+            protected org.apache.lucene.search.Query getFuzzyQuery(String field, String termStr, float minSimilarity) throws ParseException {
+              try {
+                org.apache.lucene.search.Query fuzzyQuery = reverseAwareParser.getFuzzyQuery(field, termStr, minSimilarity);
+                setRewriteMethod(fuzzyQuery);
+                return fuzzyQuery;
+              } catch (SyntaxError syntaxError) {
+                throw new RuntimeException(syntaxError);
+              }
+            }
+
+            @Override
+            protected org.apache.lucene.search.Query getPrefixQuery(String field, String termStr) throws ParseException {
+              try {
+                org.apache.lucene.search.Query prefixQuery = reverseAwareParser.getPrefixQuery(field, termStr);
+                setRewriteMethod(prefixQuery);
+                return prefixQuery;
+              } catch (SyntaxError syntaxError) {
+                throw new RuntimeException(syntaxError);
+              }
+            }
+
+            @Override
+            protected org.apache.lucene.search.Query getRegexpQuery(String field, String termStr) throws ParseException {
+              try {
+                org.apache.lucene.search.Query regexpQuery = reverseAwareParser.getRegexpQuery(field, termStr);
+                setRewriteMethod(regexpQuery);
+                return regexpQuery;
+              } catch (SyntaxError syntaxError) {
+                throw new RuntimeException(syntaxError);
+              }
+            }
           }
           ;
 

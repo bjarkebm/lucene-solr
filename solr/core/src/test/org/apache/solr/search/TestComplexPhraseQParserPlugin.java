@@ -382,5 +382,78 @@ public class TestComplexPhraseQParserPlugin extends AbstractSolrTestCase {
             , "//result[@numFound='1']"
     );
   }
+
+  @Test
+  public void testCharFilter() {
+    assertU(adoc("iso-latin1", "craezy traen", "id", "1"));
+    assertU(commit());
+    assertU(optimize());
+
+    assertQ(req("q", "{!complexphrase} iso-latin1:cr\u00E6zy")
+            , "//result[@numFound='1']"
+            , "//doc[./str[@name='id']='1']"
+    );
+
+    assertQ(req("q", "{!complexphrase} iso-latin1:tr\u00E6n")
+            , "//result[@numFound='1']"
+            , "//doc[./str[@name='id']='1']"
+    );
+
+    assertQ(req("q", "{!complexphrase} iso-latin1:c\u00E6zy~1")
+            , "//result[@numFound='1']"
+            , "//doc[./str[@name='id']='1']"
+    );
+
+    assertQ(req("q", "{!complexphrase} iso-latin1:cr\u00E6z*")
+            , "//result[@numFound='1']"
+            , "//doc[./str[@name='id']='1']"
+    );
+
+    assertQ(req("q", "{!complexphrase} iso-latin1:*\u00E6zy")
+            , "//result[@numFound='1']"
+            , "//doc[./str[@name='id']='1']"
+    );
+
+    assertQ(req("q", "{!complexphrase} iso-latin1:cr\u00E6*y")
+            , "//result[@numFound='1']"
+            , "//doc[./str[@name='id']='1']"
+    );
+
+    assertQ(req("q", "{!complexphrase} iso-latin1:[cr\u00E6zx TO cr\u00E6zz]")
+        , "//result[@numFound='1']"
+        , "//doc[./str[@name='id']='1']"
+    );
+
+    assertQ(req("q", "{!complexphrase} iso-latin1:\"cr\u00E6zy tr\u00E6n\"")
+            , "//result[@numFound='1']"
+            , "//doc[./str[@name='id']='1']"
+    );
+
+    assertQ(req("q", "{!complexphrase} iso-latin1:\"c\u00E6zy~1 tr\u00E6n\"")
+            , "//result[@numFound='1']"
+            , "//doc[./str[@name='id']='1']"
+    );
+
+    assertQ(req("q", "{!complexphrase} iso-latin1:\"cr\u00E6z* tr\u00E6n\"")
+            , "//result[@numFound='1']"
+            , "//doc[./str[@name='id']='1']"
+    );
+
+    assertQ(req("q", "{!complexphrase} iso-latin1:\"*\u00E6zy tr\u00E6n\"")
+            , "//result[@numFound='1']"
+            , "//doc[./str[@name='id']='1']"
+    );
+
+    assertQ(req("q", "{!complexphrase} iso-latin1:\"cr\u00E6*y tr\u00E6n\"")
+            , "//result[@numFound='1']"
+            , "//doc[./str[@name='id']='1']"
+    );
+
+    assertQ(req("q", "{!complexphrase} iso-latin1:\"[cr\u00E6zx TO cr\u00E6zz] tr\u00E6n\"")
+        , "//result[@numFound='1']"
+        , "//doc[./str[@name='id']='1']"
+    );
+
+  }
 }
 

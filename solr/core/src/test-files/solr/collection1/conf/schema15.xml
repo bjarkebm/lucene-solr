@@ -209,6 +209,12 @@
       <tokenizer class="solr.MockTokenizerFactory"/>
     </analyzer>
   </fieldType>
+  <fieldType name="text_iso_latin1_mapping" class="solr.TextField">
+    <analyzer>
+      <charFilter class="solr.MappingCharFilterFactory" mapping="mapping-ISOLatin1Accent.txt"/>
+      <tokenizer class="solr.MockTokenizerFactory"/>
+    </analyzer>
+  </fieldType>
   <fieldType name="standardtokfilt" class="solr.TextField">
     <analyzer>
       <tokenizer class="solr.StandardTokenizerFactory"/>
@@ -513,6 +519,7 @@
   <field name="keywordtok" type="keywordtok" indexed="true" stored="true"/>
   <field name="standardtok" type="standardtok" indexed="true" stored="true"/>
   <field name="HTMLstandardtok" type="HTMLstandardtok" indexed="true" stored="true"/>
+  <field name="iso-latin1" type="text_iso_latin1_mapping" indexed="true" stored="true"/>
   <field name="lettertok" type="lettertok" indexed="true" stored="true"/>
   <field name="whitetok" type="whitetok" indexed="true" stored="true"/>
   <field name="HTMLwhitetok" type="HTMLwhitetok" indexed="true" stored="true"/>
