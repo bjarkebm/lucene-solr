@@ -30,6 +30,7 @@ import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -587,6 +588,7 @@ public class CloudSolrClient extends SolrClient {
         nonRoutableRequest = new UpdateRequest();
       }
       nonRoutableRequest.setParams(nonRoutableParams);
+      nonRoutableRequest.setBasicAuthCredentials(request.getBasicAuthUser(), request.getBasicAuthPassword());
       List<String> urlList = new ArrayList<>();
       urlList.addAll(routes.keySet());
       Collections.shuffle(urlList, rand);
@@ -609,10 +611,8 @@ public class CloudSolrClient extends SolrClient {
 
   private Map<String,List<String>> buildUrlMap(DocCollection col) {
     Map<String, List<String>> urlMap = new HashMap<>();
-    Collection<Slice> slices = col.getActiveSlices();
-    Iterator<Slice> sliceIterator = slices.iterator();
-    while (sliceIterator.hasNext()) {
-      Slice slice = sliceIterator.next();
+    Slice[] slices = col.getActiveSlicesArr();
+    for (Slice slice : slices) {
       String name = slice.getName();
       List<String> urls = new ArrayList<>();
       Replica leader = slice.getLeader();
@@ -925,7 +925,10 @@ public class CloudSolrClient extends SolrClient {
               rootCause instanceof NoHttpResponseException ||
               rootCause instanceof SocketException);
 
-      if (wasCommError || (exc instanceof RouteException)) {
+      if (wasCommError
+          || (exc instanceof RouteException && (errorCode == 404 || errorCode == 503)) // 404 because the core does not exist 503 service unavailable
+          //TODO there are other reasons for 404. We need to change the solr response format from HTML to structured data to know that
+          ) {
         // it was a communication error. it is likely that
         // the node to which the request to be sent is down . So , expire the state
         // so that the next attempt would fetch the fresh state
@@ -1257,7 +1260,7 @@ public class CloudSolrClient extends SolrClient {
       NamedList routes = ((CloudSolrClient.RouteResponse)resp).getRouteResponses();
       DocCollection coll = getDocCollection(collection, null);
       Map<String,String> leaders = new HashMap<String,String>();
-      for (Slice slice : coll.getActiveSlices()) {
+      for (Slice slice : coll.getActiveSlicesArr()) {
         Replica leader = slice.getLeader();
         if (leader != null) {
           ZkCoreNodeProps zkProps = new ZkCoreNodeProps(leader);
@@ -1356,6 +1359,58 @@ public class CloudSolrClient extends SolrClient {
     protected boolean directUpdatesToLeadersOnly = false;
     protected boolean parallelUpdates = true;
     protected ClusterStateProvider stateProvider;
+    
+    /**
+     * @deprecated use other constructors instead.  This constructor will be changing visibility in an upcoming release.
+     */
+    @Deprecated
+    public Builder() {}
+    
+    /**
+     * Provide a series of Solr URLs to be used when configuring {@link CloudSolrClient} instances.
+     * The solr client will use these urls to understand the cluster topology, which solr nodes are active etc.
+     * 
+     * Provided Solr URLs are expected to point to the root Solr path ("http://hostname:8983/solr"); they should not
+     * include any collections, cores, or other path components.
+     *
+     * Usage example:
+     *
+     * <pre>
+     *   final List&lt;String&gt; solrBaseUrls = new ArrayList&lt;String&gt;();
+     *   solrBaseUrls.add("http://solr1:8983/solr"); solrBaseUrls.add("http://solr2:8983/solr"); solrBaseUrls.add("http://solr3:8983/solr");
+     *   final SolrClient client = new CloudSolrClient.Builder(solrBaseUrls).build();
+     * </pre>
+     */
+    public Builder(List<String> solrUrls) {
+      this.solrUrls = solrUrls;
+    }
+    
+    /**
+     * Provide a series of ZK hosts which will be used when configuring {@link CloudSolrClient} instances.
+     *
+     * Usage example when Solr stores data at the ZooKeeper root ('/'):
+     *
+     * <pre>
+     *   final List&lt;String&gt; zkServers = new ArrayList&lt;String&gt;();
+     *   zkServers.add("zookeeper1:2181"); zkServers.add("zookeeper2:2181"); zkServers.add("zookeeper3:2181");
+     *   final SolrClient client = new CloudSolrClient.Builder(zkServers, Optional.empty()).build();
+     * </pre>
+     *
+     * Usage example when Solr data is stored in a ZooKeeper chroot:
+     *
+     *  <pre>
+     *    final List&lt;String&gt; zkServers = new ArrayList&lt;String&gt;();
+     *    zkServers.add("zookeeper1:2181"); zkServers.add("zookeeper2:2181"); zkServers.add("zookeeper3:2181");
+     *    final SolrClient client = new CloudSolrClient.Builder(zkServers, Optional.of("/solr")).build();
+     *  </pre>
+     *
+     * @param zkHosts a List of at least one ZooKeeper host and port (e.g. "zookeeper1:2181")
+     * @param zkChroot the path to the root ZooKeeper node containing Solr data.  Provide {@code java.util.Optional.empty()} if no ZK chroot is used.
+     */
+    public Builder(List<String> zkHosts, Optional<String> zkChroot) {
+      this.zkHosts = zkHosts;
+      if (zkChroot.isPresent()) this.zkChroot = zkChroot.get();
+    }
 
     /**
      * Provide a ZooKeeper client endpoint to be used when configuring {@link CloudSolrClient} instances.
@@ -1365,7 +1420,10 @@ public class CloudSolrClient extends SolrClient {
      * @param zkHost
      *          The client endpoint of the ZooKeeper quorum containing the cloud
      *          state.
+     *          
+     * @deprecated use Zk-host constructor instead
      */
+    @Deprecated
     public Builder withZkHost(String zkHost) {
       this.zkHosts.add(zkHost);
       return this;
@@ -1379,7 +1437,10 @@ public class CloudSolrClient extends SolrClient {
      * 
      * Provided Solr URL is expected to point to the root Solr path ("http://hostname:8983/solr"); it should not
      * include any collections, cores, or other path components.
+     * 
+     * @deprecated use Solr-URL constructor instead
      */
+    @Deprecated
     public Builder withSolrUrl(String solrUrl) {
       this.solrUrls.add(solrUrl);
       return this;
@@ -1392,7 +1453,10 @@ public class CloudSolrClient extends SolrClient {
      * 
      * Provided Solr URLs are expected to point to the root Solr path ("http://hostname:8983/solr"); they should not
      * include any collections, cores, or other path components.
+     * 
+     * @deprecated use Solr URL constructors instead
      */
+    @Deprecated
     public Builder withSolrUrl(Collection<String> solrUrls) {
       this.solrUrls.addAll(solrUrls);
       return this;
@@ -1416,7 +1480,10 @@ public class CloudSolrClient extends SolrClient {
      *          each host in the ZooKeeper ensemble. Note that with certain
      *          Collection types like HashSet, the order of hosts in the final
      *          connect string may not be in the same order you added them.
+     *          
+     * @deprecated use Zk-host constructor instead
      */
+    @Deprecated
     public Builder withZkHost(Collection<String> zkHosts) {
       this.zkHosts.addAll(zkHosts);
       return this;
@@ -1424,7 +1491,10 @@ public class CloudSolrClient extends SolrClient {
 
     /**
      * Provides a ZooKeeper chroot for the builder to use when creating clients.
+     * 
+     * @deprecated use Zk-host constructor instead
      */
+    @Deprecated
     public Builder withZkChroot(String zkChroot) {
       this.zkChroot = zkChroot;
       return this;
@@ -1477,6 +1547,14 @@ public class CloudSolrClient extends SolrClient {
       return this;
     }
 
+    /**
+     * Expert feature where you want to implement a custom cluster discovery mechanism of the solr nodes as part of the
+     * cluster.
+     *
+     * @deprecated since this is an expert feature we don't want to expose this to regular users. To use this feature
+     * extend CloudSolrClient.Builder and pass your custom ClusterStateProvider
+     */
+    @Deprecated
     public Builder withClusterStateProvider(ClusterStateProvider stateProvider) {
       this.stateProvider = stateProvider;
       return this;

@@ -81,6 +81,8 @@ public class TestInPlaceUpdatesDistrib extends AbstractFullDistribZkTestBase {
     // asserting inplace updates happen by checking the internal [docid]
     systemSetPropertySolrTestsMergePolicyFactory(NoMergePolicyFactory.class.getName());
 
+    randomizeUpdateLogImpl();
+
     initCore(configString, schemaString);
     
     // sanity check that autocommits are disabled
@@ -117,6 +119,8 @@ public class TestInPlaceUpdatesDistrib extends AbstractFullDistribZkTestBase {
   @Test
   @ShardsFixed(num = 3)
   @SuppressWarnings("unchecked")
+  //28-June-2018 @BadApple(bugUrl="https://issues.apache.org/jira/browse/SOLR-12028") // 21-May-2018
+  // commented 4-Sep-2018 @LuceneTestCase.BadApple(bugUrl="https://issues.apache.org/jira/browse/SOLR-12028") // 2-Aug-2018
   public void test() throws Exception {
     waitForRecoveriesToFinish(true);
     mapReplicasToClients();

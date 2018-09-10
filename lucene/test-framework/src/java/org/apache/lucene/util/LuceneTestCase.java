@@ -52,6 +52,7 @@ import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -64,6 +65,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.MockAnalyzer;
@@ -86,6 +88,7 @@ import org.apache.lucene.search.Query;
 import org.apache.lucene.search.QueryCache;
 import org.apache.lucene.search.QueryCachingPolicy;
 import org.apache.lucene.store.BaseDirectoryWrapper;
+import org.apache.lucene.store.ByteBuffersDirectory;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 import org.apache.lucene.store.FSLockFactory;
@@ -282,19 +285,20 @@ public abstract class LuceneTestCase extends Assert {
   public @interface Slow {}
 
   /**
-   * Annotation for tests that fail frequently and should
-   * be moved to a <a href="https://builds.apache.org/job/Lucene-BadApples-trunk-java7/">"vault" plan in Jenkins</a>.
+   * Annotation for tests that fail frequently and are not executed in Jenkins builds
+   * to not spam mailing lists with false reports.
    *
-   * Tests annotated with this will be turned off by default. If you want to enable
+   * Tests are turned on for developers by default. If you want to disable
    * them, set:
    * <pre>
-   * -Dtests.badapples=true
+   * -Dtests.badapples=false
    * </pre>
+   * (or do this through {@code ~./lucene.build.properties}).
    */
   @Documented
   @Inherited
   @Retention(RetentionPolicy.RUNTIME)
-  @TestGroup(enabled = false, sysProperty = SYSPROP_BADAPPLES)
+  @TestGroup(enabled = true, sysProperty = SYSPROP_BADAPPLES)
   public @interface BadApple {
     /** Point to JIRA entry. */
     public String bugUrl();
@@ -427,16 +431,22 @@ public abstract class LuceneTestCase extends Assert {
   public static final String TEST_LINE_DOCS_FILE = System.getProperty("tests.linedocsfile", DEFAULT_LINE_DOCS_FILE);
 
   /** Whether or not {@link Nightly} tests should run. */
-  public static final boolean TEST_NIGHTLY = systemPropertyAsBoolean(SYSPROP_NIGHTLY, false);
+  public static final boolean TEST_NIGHTLY = systemPropertyAsBoolean(SYSPROP_NIGHTLY, Nightly.class.getAnnotation(TestGroup.class).enabled());
 
   /** Whether or not {@link Weekly} tests should run. */
-  public static final boolean TEST_WEEKLY = systemPropertyAsBoolean(SYSPROP_WEEKLY, false);
+  public static final boolean TEST_WEEKLY = systemPropertyAsBoolean(SYSPROP_WEEKLY, Weekly.class.getAnnotation(TestGroup.class).enabled());
   
+  /** Whether or not {@link Monster} tests should run. */
+  public static final boolean TEST_MONSTER = systemPropertyAsBoolean(SYSPROP_MONSTER, Monster.class.getAnnotation(TestGroup.class).enabled());
+
   /** Whether or not {@link AwaitsFix} tests should run. */
-  public static final boolean TEST_AWAITSFIX = systemPropertyAsBoolean(SYSPROP_AWAITSFIX, false);
+  public static final boolean TEST_AWAITSFIX = systemPropertyAsBoolean(SYSPROP_AWAITSFIX, AwaitsFix.class.getAnnotation(TestGroup.class).enabled());
+
+  /** Whether or not {@link BadApple} tests should run. */
+  public static final boolean TEST_BADAPPLES = systemPropertyAsBoolean(SYSPROP_BADAPPLES, BadApple.class.getAnnotation(TestGroup.class).enabled());
 
   /** Whether or not {@link Slow} tests should run. */
-  public static final boolean TEST_SLOW = systemPropertyAsBoolean(SYSPROP_SLOW, false);
+  public static final boolean TEST_SLOW = systemPropertyAsBoolean(SYSPROP_SLOW, Slow.class.getAnnotation(TestGroup.class).enabled());
 
   /** Throttling, see {@link MockDirectoryWrapper#setThrottling(Throttling)}. */
   public static final Throttling TEST_THROTTLING = TEST_NIGHTLY ? Throttling.SOMETIMES : Throttling.NEVER;
@@ -480,6 +490,7 @@ public abstract class LuceneTestCase extends Assert {
   static {
     CORE_DIRECTORIES = new ArrayList<>(FS_DIRECTORIES);
     CORE_DIRECTORIES.add("RAMDirectory");
+    CORE_DIRECTORIES.add(ByteBuffersDirectory.class.getSimpleName());
   }
   
   /** A {@link org.apache.lucene.search.QueryCachingPolicy} that randomly caches. */
@@ -1042,7 +1053,11 @@ public abstract class LuceneTestCase extends Assert {
   }
 
   public static MergePolicy newMergePolicy(Random r) {
-    if (rarely(r)) {
+    return newMergePolicy(r, true);
+  }
+
+  public static MergePolicy newMergePolicy(Random r, boolean includeMockMP) {
+    if (includeMockMP && rarely(r)) {
       return new MockRandomMergePolicy(r);
     } else if (r.nextBoolean()) {
       return newTieredMergePolicy(r);
@@ -1120,7 +1135,7 @@ public abstract class LuceneTestCase extends Assert {
       tmp.setSegmentsPerTier(TestUtil.nextInt(r, 10, 50));
     }
     configureRandom(r, tmp);
-    tmp.setReclaimDeletesWeight(r.nextDouble()*4);
+    tmp.setDeletesPctAllowed(20 + random().nextDouble() * 30);
     return tmp;
   }
 
@@ -1255,7 +1270,7 @@ public abstract class LuceneTestCase extends Assert {
           tmp.setSegmentsPerTier(TestUtil.nextInt(r, 10, 50));
         }
         configureRandom(r, tmp);
-        tmp.setReclaimDeletesWeight(r.nextDouble()*4);
+        tmp.setDeletesPctAllowed(20 + random().nextDouble() * 30);
       }
       didChange = true;
     }
@@ -1786,7 +1801,7 @@ public abstract class LuceneTestCase extends Assert {
   public static void overrideDefaultQueryCache() {
     // we need to reset the query cache in an @BeforeClass so that tests that
     // instantiate an IndexSearcher in an @BeforeClass method use a fresh new cache
-    IndexSearcher.setDefaultQueryCache(new LRUQueryCache(10000, 1 << 25, context -> true, random().nextBoolean() ? 1.1f : Float.POSITIVE_INFINITY));
+    IndexSearcher.setDefaultQueryCache(new LRUQueryCache(10000, 1 << 25, context -> true));
     IndexSearcher.setDefaultQueryCachingPolicy(MAYBE_CACHE_POLICY);
   }
 
@@ -2654,6 +2669,11 @@ public abstract class LuceneTestCase extends Assert {
 
   /** Checks a specific exception class is thrown by the given runnable, and returns it. */
   public static <T extends Throwable> T expectThrows(Class<T> expectedType, ThrowingRunnable runnable) {
+    return expectThrows(expectedType, "Expected exception "+ expectedType.getSimpleName() + " but no exception was thrown", runnable);
+  }
+
+  /** Checks a specific exception class is thrown by the given runnable, and returns it. */
+  public static <T extends Throwable> T expectThrows(Class<T> expectedType, String noExceptionMessage, ThrowingRunnable runnable) {
     try {
       runnable.run();
     } catch (Throwable e) {
@@ -2664,7 +2684,39 @@ public abstract class LuceneTestCase extends Assert {
       assertion.initCause(e);
       throw assertion;
     }
-    throw new AssertionFailedError("Expected exception " + expectedType.getSimpleName() + " but no exception was thrown");
+    throw new AssertionFailedError(noExceptionMessage);
+  }
+
+  /** Checks a specific exception class is thrown by the given runnable, and returns it. */
+  public static <T extends Throwable> T expectThrowsAnyOf(List<Class<? extends T>> expectedTypes, ThrowingRunnable runnable) {
+    if (expectedTypes.isEmpty()) {
+      throw new AssertionError("At least one expected exception type is required?");
+    }
+
+    Throwable thrown = null;
+    try {
+      runnable.run();
+    } catch (Throwable e) {
+      for (Class<? extends T> expectedType : expectedTypes) {
+        if (expectedType.isInstance(e)) {
+          return expectedType.cast(e);
+        }
+      }
+      thrown = e;
+    }
+
+    List<String> exceptionTypes = expectedTypes.stream().map(c -> c.getSimpleName()).collect(Collectors.toList());
+
+    if (thrown != null) {
+      AssertionFailedError assertion = new AssertionFailedError("Unexpected exception type, expected any of " +
+          exceptionTypes +
+          " but got: " + thrown);
+      assertion.initCause(thrown);
+      throw assertion;
+    } else {
+      throw new AssertionFailedError("Expected any of the following exception types: " +
+          exceptionTypes+ " but no exception was thrown.");
+    }
   }
 
   /**
@@ -2682,17 +2734,64 @@ public abstract class LuceneTestCase extends Assert {
           return expectedWrappedType.cast(cause);
         } else {
           AssertionFailedError assertion = new AssertionFailedError
-              ("Unexpected wrapped exception type, expected " + expectedWrappedType.getSimpleName());
+              ("Unexpected wrapped exception type, expected " + expectedWrappedType.getSimpleName() 
+                  + " but got: " + cause);
           assertion.initCause(e);
           throw assertion;
         }
       }
       AssertionFailedError assertion = new AssertionFailedError
-          ("Unexpected outer exception type, expected " + expectedOuterType.getSimpleName());
+          ("Unexpected outer exception type, expected " + expectedOuterType.getSimpleName()
+           + " but got: " + e);
       assertion.initCause(e);
       throw assertion;
     }
-    throw new AssertionFailedError("Expected outer exception " + expectedOuterType.getSimpleName());
+    throw new AssertionFailedError("Expected outer exception " + expectedOuterType.getSimpleName()
+        + " but no exception was thrown.");
+  }
+
+  /**
+   * Checks that one of the specified wrapped and outer exception classes are thrown
+   * by the given runnable, and returns the outer exception.
+   * 
+   * This method accepts outer exceptions with no wrapped exception;
+   * an empty list of expected wrapped exception types indicates no wrapped exception.
+   */
+  public static <TO extends Throwable, TW extends Throwable> TO expectThrowsAnyOf
+  (LinkedHashMap<Class<? extends TO>,List<Class<? extends TW>>> expectedOuterToWrappedTypes, ThrowingRunnable runnable) {
+    try {
+      runnable.run();
+    } catch (Throwable e) {
+      for (Map.Entry<Class<? extends TO>, List<Class<? extends TW>>> entry : expectedOuterToWrappedTypes.entrySet()) {
+        Class<? extends TO> expectedOuterType = entry.getKey();
+        List<Class<? extends TW>> expectedWrappedTypes = entry.getValue();
+        Throwable cause = e.getCause();
+        if (expectedOuterType.isInstance(e)) {
+          if (expectedWrappedTypes.isEmpty()) {
+            return null; // no wrapped exception
+          } else {
+            for (Class<? extends TW> expectedWrappedType : expectedWrappedTypes) {
+              if (expectedWrappedType.isInstance(cause)) {
+                return expectedOuterType.cast(e);
+              }
+            }
+            List<String> wrappedTypes = expectedWrappedTypes.stream().map(Class::getSimpleName).collect(Collectors.toList());
+            AssertionFailedError assertion = new AssertionFailedError
+                ("Unexpected wrapped exception type, expected one of " + wrappedTypes + " but got: " + cause);
+            assertion.initCause(e);
+            throw assertion;
+          }
+        }
+      }
+      List<String> outerTypes = expectedOuterToWrappedTypes.keySet().stream().map(Class::getSimpleName).collect(Collectors.toList());
+      AssertionFailedError assertion = new AssertionFailedError
+          ("Unexpected outer exception type, expected one of " + outerTypes + " but got: " + e);
+      assertion.initCause(e);
+      throw assertion;
+    }
+    List<String> outerTypes = expectedOuterToWrappedTypes.keySet().stream().map(Class::getSimpleName).collect(Collectors.toList());
+    throw new AssertionFailedError("Expected any of the following outer exception types: " + outerTypes
+        + " but no exception was thrown.");
   }
 
   /** Returns true if the file exists (can be opened), false

@@ -65,7 +65,7 @@ public class TestComplexPhraseQuery extends LuceneTestCase {
     checkMatches("\"(john OR johathon)  smith\"", "1,2"); // boolean logic with
     // brackets works.
     checkMatches("\"(john OR nosuchword*)  smith\"", "1"); // boolean logic with
-    // brackets works when one of the terms in BooleanQuery does not exist (SOLR-10078).
+    // brackets works when one of the terms in BooleanQuery does not exist (LUCENE-8305).
     checkMatches("\"(jo* -john) smyth~\"", "2"); // boolean logic with
     // brackets works.
 

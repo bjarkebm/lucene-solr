@@ -56,6 +56,7 @@ public class TestV2Request extends SolrCloudTestCase {
   }
 
   @Test
+// 12-Jun-2018   @BadApple(bugUrl="https://issues.apache.org/jira/browse/SOLR-12028")
   public void testHttpSolrClient() throws Exception {
     HttpSolrClient solrClient = new HttpSolrClient.Builder(
         cluster.getJettySolrRunner(0).getBaseUrl().toString()).build();
@@ -64,6 +65,7 @@ public class TestV2Request extends SolrCloudTestCase {
   }
 
   @Test
+  // 12-Jun-2018 @BadApple(bugUrl="https://issues.apache.org/jira/browse/SOLR-12028")
   public void testCloudSolrClient() throws Exception {
     doTest(cluster.getSolrClient());
   }
@@ -83,9 +85,11 @@ public class TestV2Request extends SolrCloudTestCase {
     assertSuccess(client, new V2Request.Builder("/c/_introspect").build());
 
 
+    String requestHandlerName = "/x" + random().nextInt();
     assertSuccess(client, new V2Request.Builder("/c/test/config")
         .withMethod(SolrRequest.METHOD.POST)
-        .withPayload("{'create-requesthandler' : { 'name' : '/x', 'class': 'org.apache.solr.handler.DumpRequestHandler' , 'startup' : 'lazy'}}")
+        .withPayload("{'create-requesthandler' : { 'name' : '" + requestHandlerName + 
+            "', 'class': 'org.apache.solr.handler.DumpRequestHandler' , 'startup' : 'lazy'}}")
         .build());
 
     assertSuccess(client, new V2Request.Builder("/c/test").withMethod(SolrRequest.METHOD.DELETE).build());

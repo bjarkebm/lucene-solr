@@ -23,6 +23,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+import org.apache.solr.client.solrj.SolrClient;
 import org.apache.solr.client.solrj.SolrRequest;
 import org.apache.solr.client.solrj.cloud.autoscaling.TriggerEventProcessorStage;
 import org.apache.solr.client.solrj.embedded.JettySolrRunner;
@@ -92,6 +93,8 @@ public class AutoscalingHistoryHandlerTest extends SolrCloudTestCase {
         .setCreateNodeSet(String.join(",", otherNodes))
         .setMaxShardsPerNode(3)
         .process(solrClient);
+    waitForRecovery(CollectionAdminParams.SYSTEM_COLL);
+    waitForRecovery(COLL_NAME);
   }
 
   public static class TesterListener extends TriggerListenerBase {
@@ -115,20 +118,30 @@ public class AutoscalingHistoryHandlerTest extends SolrCloudTestCase {
     actionFiredLatch = new CountDownLatch(1);
     listenerFiredLatch = new CountDownLatch(1);
 
+    // change rules to create violations
+    String setClusterPolicyCommand = "{" +
+        " 'set-cluster-policy': [" +
+        "      {'replica':'<2', 'shard': '#EACH', 'node': '#ANY'}" +
+        "    ]" +
+        "}";
+    SolrRequest req = createAutoScalingRequest(SolrRequest.METHOD.POST, setClusterPolicyCommand);
+    solrClient.request(req);
+
+
     // first trigger
     String setTriggerCommand = "{" +
         "'set-trigger' : {" +
         "'name' : '" + PREFIX + "_node_added_trigger'," +
         "'event' : 'nodeAdded'," +
         "'waitFor' : '0s'," +
-        "'enabled' : true," +
+        "'enabled' : false," +
         "'actions' : [" +
         "{'name':'compute_plan','class':'solr.ComputePlanAction'}," +
         "{'name':'execute_plan','class':'solr.ExecutePlanAction'}," +
         "{'name':'test','class':'" + TesterAction.class.getName() + "'}" +
         "]" +
         "}}";
-    SolrRequest req = createAutoScalingRequest(SolrRequest.METHOD.POST, setTriggerCommand);
+    req = createAutoScalingRequest(SolrRequest.METHOD.POST, setTriggerCommand);
     NamedList<Object> response = solrClient.request(req);
     assertEquals(response.get("result").toString(), "success");
 
@@ -138,7 +151,7 @@ public class AutoscalingHistoryHandlerTest extends SolrCloudTestCase {
         "'name' : '" + PREFIX + "_node_lost_trigger'," +
         "'event' : 'nodeLost'," +
         "'waitFor' : '0s'," +
-        "'enabled' : true," +
+        "'enabled' : false," +
         "'actions' : [" +
         "{'name':'compute_plan','class':'solr.ComputePlanAction'}," +
         "{'name':'execute_plan','class':'solr.ExecutePlanAction'}," +
@@ -221,6 +234,24 @@ public class AutoscalingHistoryHandlerTest extends SolrCloudTestCase {
     response = solrClient.request(req);
     assertEquals(response.get("result").toString(), "success");
 
+    // setup is complete, enable the triggers
+    String resumeTriggerCommand = "{" +
+        "'resume-trigger' : {" +
+        "'name' : '" + PREFIX + "_node_added_trigger'," +
+        "}" +
+        "}";
+    req = createAutoScalingRequest(SolrRequest.METHOD.POST, resumeTriggerCommand);
+    response = solrClient.request(req);
+    assertEquals(response.get("result").toString(), "success");
+    resumeTriggerCommand = "{" +
+        "'resume-trigger' : {" +
+        "'name' : '" + PREFIX + "_node_lost_trigger'," +
+        "}" +
+        "}";
+    req = createAutoScalingRequest(SolrRequest.METHOD.POST, resumeTriggerCommand);
+    response = solrClient.request(req);
+    assertEquals(response.get("result").toString(), "success");
+
   }
 
   private void resetLatches() {
@@ -262,15 +293,7 @@ public class AutoscalingHistoryHandlerTest extends SolrCloudTestCase {
 
     query = params(CommonParams.QT, CommonParams.AUTOSCALING_HISTORY_PATH,
       AutoscalingHistoryHandler.TRIGGER_PARAM, PREFIX + "_node_added_trigger");
-    QueryResponse rsp = solrClient.query(query);
-    docs = rsp.getResults();
-    if (docs.size() != 8) {
-      log.info("Cluster state: " + solrClient.getZkStateReader().getClusterState());
-      query = params(CommonParams.QT, CommonParams.AUTOSCALING_HISTORY_PATH);
-      log.info("Wrong response: ", rsp);
-      log.info("Full response: " + solrClient.query(query));
-    }
-    assertEquals(8, docs.size());
+    docs = queryAndAssertDocs(query, solrClient, 8);
 
     query = params(CommonParams.QT, CommonParams.AUTOSCALING_HISTORY_PATH,
         AutoscalingHistoryHandler.STAGE_PARAM, "STARTED");
@@ -280,8 +303,7 @@ public class AutoscalingHistoryHandlerTest extends SolrCloudTestCase {
 
     query = params(CommonParams.QT, CommonParams.AUTOSCALING_HISTORY_PATH,
         AutoscalingHistoryHandler.NODE_PARAM, nodeAddedName);
-    docs = solrClient.query(query).getResults();
-    assertEquals(8, docs.size());
+    docs = queryAndAssertDocs(query, solrClient, 8);
     for (SolrDocument doc : docs) {
       assertTrue(doc.getFieldValues("event.property.nodeNames_ss").contains(nodeAddedName));
     }
@@ -302,27 +324,22 @@ public class AutoscalingHistoryHandlerTest extends SolrCloudTestCase {
 
     query = params(CommonParams.QT, CommonParams.AUTOSCALING_HISTORY_PATH,
         AutoscalingHistoryHandler.COLLECTION_PARAM, COLL_NAME);
-    rsp = solrClient.query(query);
-    docs = rsp.getResults();
-    if (docs.size() != 5) {
-      log.info("Cluster state: " + solrClient.getZkStateReader().getClusterState());
-      query = params(CommonParams.QT, CommonParams.AUTOSCALING_HISTORY_PATH);
-      log.info("Wrong response: ", rsp);
-      log.info("Full response: " + solrClient.query(query));
-    }
-    assertEquals(5, docs.size());
+    docs = queryAndAssertDocs(query, solrClient, 5);
     assertEquals("AFTER_ACTION", docs.get(0).getFieldValue("stage_s"));
     assertEquals("compute_plan", docs.get(0).getFieldValue("action_s"));
 
     // reset latches
     resetLatches();
 
-    // kill a node where a replica exists
+    // kill a node where a replica exists - BUT not the Overseer
+    NamedList<Object> overSeerStatus = cluster.getSolrClient().request(CollectionAdminRequest.getOverseerStatus());
+    String overseerLeader = (String) overSeerStatus.get("leader");
     ClusterState state = cluster.getSolrClient().getZkStateReader().getClusterState();
     DocCollection coll = state.getCollection(COLL_NAME);
     String nodeToKill = null;
     for (Replica r : coll.getReplicas()) {
-      if (r.isActive(state.getLiveNodes())) {
+      if (r.isActive(state.getLiveNodes()) &&
+          !r.getNodeName().equals(overseerLeader)) {
         nodeToKill = r.getNodeName();
         break;
       }
@@ -354,24 +371,28 @@ public class AutoscalingHistoryHandlerTest extends SolrCloudTestCase {
     query = params(CommonParams.QT, CommonParams.AUTOSCALING_HISTORY_PATH,
         AutoscalingHistoryHandler.TRIGGER_PARAM, PREFIX + "_node_lost_trigger");
     docs = solrClient.query(query).getResults();
-    assertEquals(8, docs.size());
+    assertEquals(docs.toString(), 8, docs.size());
 
     query = params(CommonParams.QT, CommonParams.AUTOSCALING_HISTORY_PATH,
         AutoscalingHistoryHandler.TRIGGER_PARAM, PREFIX + "_node_lost_trigger",
         AutoscalingHistoryHandler.COLLECTION_PARAM, COLL_NAME);
-    rsp = solrClient.query(query);
-    docs = rsp.getResults();
-    if (docs.size() != 5) {
-      log.info("Cluster state: " + solrClient.getZkStateReader().getClusterState());
-      query = params(CommonParams.QT, CommonParams.AUTOSCALING_HISTORY_PATH);
-      log.info("Wrong response: ", rsp);
-      log.info("Full response: " + solrClient.query(query));
-    }
-
-    assertEquals(5, docs.size());
+    docs = queryAndAssertDocs(query, solrClient, 5);
   }
 
-  private void waitForRecovery(String collection) throws Exception {
+  private SolrDocumentList queryAndAssertDocs(ModifiableSolrParams query, SolrClient client, int expected) throws Exception {
+    QueryResponse rsp = client.query(query);
+    SolrDocumentList docs = rsp.getResults();
+    if (docs.size() != expected) {
+      log.info("History query: " + query);
+      log.info("Wrong response: " + rsp);
+      ModifiableSolrParams fullQuery = params(CommonParams.QT, CommonParams.AUTOSCALING_HISTORY_PATH);
+      log.info("Full response: " + client.query(fullQuery));
+    }
+    assertEquals("Wrong number of documents", expected, docs.size());
+    return docs;
+  }
+
+  private static void waitForRecovery(String collection) throws Exception {
     log.info("Waiting for recovery of " + collection);
     boolean recovered = false;
     boolean allActive = true;

@@ -19,9 +19,12 @@ package org.apache.solr.common.util;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
 import java.io.Reader;
 import java.io.StringReader;
 import java.io.UnsupportedEncodingException;
+import java.io.Writer;
 import java.lang.invoke.MethodHandles;
 import java.net.URL;
 import java.net.URLDecoder;
@@ -38,13 +41,14 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.apache.http.HttpEntity;
 import org.apache.http.util.EntityUtils;
-import org.apache.solr.client.solrj.cloud.autoscaling.DistribStateManager;
+import org.apache.solr.client.solrj.cloud.DistribStateManager;
 import org.apache.solr.client.solrj.cloud.autoscaling.VersionedData;
 import org.apache.solr.client.solrj.impl.BinaryRequestWriter;
 import org.apache.solr.common.IteratorWriter;
@@ -53,6 +57,7 @@ import org.apache.solr.common.SolrException;
 import org.apache.solr.common.SpecProvider;
 import org.apache.solr.common.cloud.SolrZkClient;
 import org.apache.solr.common.cloud.ZkOperation;
+import org.apache.solr.common.cloud.ZkStateReader;
 import org.apache.solr.common.params.CommonParams;
 import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.server.ByteBufferInputStream;
@@ -62,7 +67,9 @@ import org.noggit.JSONWriter;
 import org.noggit.ObjectBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Collections.unmodifiableList;
 import static java.util.Collections.unmodifiableSet;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
@@ -135,6 +142,36 @@ public class Utils {
     return mutable ? result : result instanceof Set ? unmodifiableSet((Set) result) : unmodifiableList((List) result);
   }
 
+  public static void writeJson(Object o, OutputStream os, boolean indent) throws IOException {
+    writeJson(o, new OutputStreamWriter(os, UTF_8), indent)
+        .flush();
+  }
+
+  public static Writer writeJson(Object o, Writer writer, boolean indent) throws IOException {
+    new SolrJSONWriter(writer)
+        .setIndent(indent)
+        .writeObj(o)
+        .close();
+    return writer;
+  }
+
+  private static class MapWriterJSONWriter extends JSONWriter {
+
+    public MapWriterJSONWriter(CharArr out, int indentSize) {
+      super(out, indentSize);
+    }
+
+    @Override
+    public void handleUnknownClass(Object o) {
+      if (o instanceof MapWriter) {
+        Map m = ((MapWriter)o).toMap(new LinkedHashMap<>());
+        write(m);
+      } else {
+        super.handleUnknownClass(o);
+      }
+    }
+  }
+
   public static byte[] toJSON(Object o) {
     if(o == null) return new byte[0];
     CharArr out = new CharArr();
@@ -145,7 +182,7 @@ public class Utils {
         o = ((IteratorWriter)o).toList(new ArrayList<>());
       }
     }
-    new JSONWriter(out, 2).write(o); // indentation by default
+    new MapWriterJSONWriter(out, 2).write(o); // indentation by default
     return toUTF8(out);
   }
 
@@ -456,6 +493,48 @@ public class Utils {
     }
   }
 
+  /**Applies one json over other. The 'input' is applied over the sink
+   * The values in input isapplied over the values in 'sink' . If a value is 'null'
+   * that value is removed from sink
+   *
+   * @param sink the original json object to start with. Ensure that this Map is mutable
+   * @param input the json with new values
+   * @return whether there was any change made to sink or not.
+   */
+
+  public static boolean mergeJson(Map<String, Object> sink, Map<String, Object> input) {
+    boolean isModified = false;
+    for (Map.Entry<String, Object> e : input.entrySet()) {
+      if (sink.get(e.getKey()) != null) {
+        Object sinkVal = sink.get(e.getKey());
+        if (e.getValue() == null) {
+          sink.remove(e.getKey());
+          isModified = true;
+        } else {
+          if (e.getValue() instanceof Map) {
+            Map<String, Object> mapInputVal = (Map<String, Object>) e.getValue();
+            if (sinkVal instanceof Map) {
+              if (mergeJson((Map<String, Object>) sinkVal, mapInputVal)) isModified = true;
+            } else {
+              sink.put(e.getKey(), mapInputVal);
+              isModified = true;
+            }
+          } else {
+            sink.put(e.getKey(), e.getValue());
+            isModified = true;
+          }
+
+        }
+      } else if (e.getValue() != null) {
+        sink.put(e.getKey(), e.getValue());
+        isModified = true;
+      }
+
+    }
+
+    return isModified;
+  }
+
   public static String getBaseUrlForNodeName(final String nodeName, String urlScheme) {
     final int _offset = nodeName.indexOf("_");
     if (_offset < 0) {
@@ -471,10 +550,29 @@ public class Utils {
   }
 
   public static long time(TimeSource timeSource, TimeUnit unit) {
-    return unit.convert(timeSource.getTime(), TimeUnit.NANOSECONDS);
+    return unit.convert(timeSource.getTimeNs(), TimeUnit.NANOSECONDS);
   }
 
   public static long timeElapsed(TimeSource timeSource, long start, TimeUnit unit) {
-    return unit.convert(timeSource.getTime() - NANOSECONDS.convert(start, unit), NANOSECONDS);
+    return unit.convert(timeSource.getTimeNs() - NANOSECONDS.convert(start, unit), NANOSECONDS);
+  }
+
+  public static String getMDCNode() {
+    String s = MDC.get(ZkStateReader.NODE_NAME_PROP);
+    if (s == null) return null;
+    if (s.startsWith("n:")) {
+      return s.substring(2);
+    } else {
+      return null;
+    }
+  }
+
+  public static <T> T handleExp(Logger logger, T def, Callable<T> c) {
+    try {
+      return c.call();
+    } catch (Exception e) {
+      logger.error(e.getMessage(), e);
+    }
+    return def;
   }
 }

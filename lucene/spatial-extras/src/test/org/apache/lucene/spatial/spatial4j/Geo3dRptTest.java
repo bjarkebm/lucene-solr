@@ -18,13 +18,17 @@ package org.apache.lucene.spatial.spatial4j;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 
 import com.carrotsearch.randomizedtesting.annotations.Repeat;
+import org.apache.lucene.spatial.SpatialTestData;
 import org.apache.lucene.spatial.composite.CompositeSpatialStrategy;
 import org.apache.lucene.spatial.prefix.RandomSpatialOpStrategyTestCase;
 import org.apache.lucene.spatial.prefix.RecursivePrefixTreeStrategy;
 import org.apache.lucene.spatial.prefix.tree.GeohashPrefixTree;
+import org.apache.lucene.spatial.prefix.tree.QuadPrefixTree;
+import org.apache.lucene.spatial.prefix.tree.S2PrefixTree;
 import org.apache.lucene.spatial.prefix.tree.SpatialPrefixTree;
 import org.apache.lucene.spatial.query.SpatialOperation;
 import org.apache.lucene.spatial.serialized.SerializedDVStrategy;
@@ -32,6 +36,7 @@ import org.apache.lucene.spatial3d.geom.GeoAreaShape;
 import org.apache.lucene.spatial3d.geom.GeoPath;
 import org.apache.lucene.spatial3d.geom.GeoPathFactory;
 import org.apache.lucene.spatial3d.geom.GeoPoint;
+import org.apache.lucene.spatial3d.geom.GeoPointShape;
 import org.apache.lucene.spatial3d.geom.GeoPolygonFactory;
 import org.apache.lucene.spatial3d.geom.PlanetModel;
 import org.apache.lucene.spatial3d.geom.RandomGeo3dShapeGenerator;
@@ -49,9 +54,18 @@ public class Geo3dRptTest extends RandomSpatialOpStrategyTestCase {
   private SpatialPrefixTree grid;
   private RecursivePrefixTreeStrategy rptStrategy;
 
-  private void setupGeohashGrid() {
-    this.grid = new GeohashPrefixTree(ctx, 2);//A fairly shallow grid
+  private void setupGrid() {
+    int type = random().nextInt(4);
+    if (type == 0) {
+      this.grid = new GeohashPrefixTree(ctx, 2);
+    } else if (type == 1) {
+      this.grid = new QuadPrefixTree(ctx, 5);
+    } else {
+      int arity = random().nextInt(3) + 1;
+      this.grid = new S2PrefixTree(ctx, 5 - arity, arity);
+    }
     this.rptStrategy = newRPT();
+    this.rptStrategy.setPruneLeafyBranches(random().nextBoolean());
   }
 
   protected RecursivePrefixTreeStrategy newRPT() {
@@ -68,7 +82,7 @@ public class Geo3dRptTest extends RandomSpatialOpStrategyTestCase {
     factory.planetModel = planetModel;
     ctx = factory.newSpatialContext();
 
-    setupGeohashGrid();
+    setupGrid();
 
     SerializedDVStrategy serializedDVStrategy = new SerializedDVStrategy(ctx, getClass().getSimpleName() + "_sdv");
     this.strategy = new CompositeSpatialStrategy("composite_" + getClass().getSimpleName(),
@@ -84,7 +98,7 @@ public class Geo3dRptTest extends RandomSpatialOpStrategyTestCase {
     points.add(new GeoPoint(planetModel, 14 * DEGREES_TO_RADIANS, -180 * DEGREES_TO_RADIANS));
     points.add(new GeoPoint(planetModel, -15 * DEGREES_TO_RADIANS, 153 * DEGREES_TO_RADIANS));
 
-    final Shape triangle = new Geo3dShape(GeoPolygonFactory.makeGeoPolygon(planetModel, points),ctx);
+    final Shape triangle = new Geo3dShape<>(GeoPolygonFactory.makeGeoPolygon(planetModel, points),ctx);
     final Rectangle rect = ctx.makeRectangle(-49, -45, 73, 86);
     testOperation(rect,SpatialOperation.Intersects,triangle, false);
   }
@@ -99,18 +113,18 @@ public class Geo3dRptTest extends RandomSpatialOpStrategyTestCase {
     points.add(new GeoPoint(planetModel, 14 * DEGREES_TO_RADIANS, -180 * DEGREES_TO_RADIANS));
     points.add(new GeoPoint(planetModel, -15 * DEGREES_TO_RADIANS, 153 * DEGREES_TO_RADIANS));
     final GeoPoint[] pathPoints = new GeoPoint[] {
-      new GeoPoint(planetModel, 55.0 * DEGREES_TO_RADIANS, -26.0 * DEGREES_TO_RADIANS),
-      new GeoPoint(planetModel, -90.0 * DEGREES_TO_RADIANS, 0.0),
-      new GeoPoint(planetModel, 54.0 * DEGREES_TO_RADIANS, 165.0 * DEGREES_TO_RADIANS),
-      new GeoPoint(planetModel, -90.0 * DEGREES_TO_RADIANS, 0.0)};
+        new GeoPoint(planetModel, 55.0 * DEGREES_TO_RADIANS, -26.0 * DEGREES_TO_RADIANS),
+        new GeoPoint(planetModel, -90.0 * DEGREES_TO_RADIANS, 0.0),
+        new GeoPoint(planetModel, 54.0 * DEGREES_TO_RADIANS, 165.0 * DEGREES_TO_RADIANS),
+        new GeoPoint(planetModel, -90.0 * DEGREES_TO_RADIANS, 0.0)};
     final GeoPath path = GeoPathFactory.makeGeoPath(planetModel, 29 * DEGREES_TO_RADIANS, pathPoints);
-    final Shape shape = new Geo3dShape(path,ctx);
+    final Shape shape = new Geo3dShape<>(path,ctx);
     final Rectangle rect = ctx.makeRectangle(131, 143, 39, 54);
     testOperation(rect,SpatialOperation.Intersects,shape,true);
   }
 
   @Test
-  @Repeat(iterations = 10)
+  @Repeat(iterations = 30)
   public void testOperations() throws IOException {
     setupStrategy();
 
@@ -121,6 +135,9 @@ public class Geo3dRptTest extends RandomSpatialOpStrategyTestCase {
   protected Shape randomIndexedShape() {
     int type = shapeGenerator.randomShapeType();
     GeoAreaShape areaShape = shapeGenerator.randomGeoAreaShape(type, planetModel);
+    if (areaShape instanceof GeoPointShape) {
+      return new Geo3dPointShape((GeoPointShape) areaShape, ctx);
+    }
     return new Geo3dShape<>(areaShape, ctx);
   }
 
@@ -129,6 +146,23 @@ public class Geo3dRptTest extends RandomSpatialOpStrategyTestCase {
     int type = shapeGenerator.randomShapeType();
     GeoAreaShape areaShape = shapeGenerator.randomGeoAreaShape(type, planetModel);
     return new Geo3dShape<>(areaShape, ctx);
+  }
+
+  @Test
+  public void testOperationsFromFile() throws IOException {
+    setupStrategy();
+    final Iterator<SpatialTestData> indexedSpatialData = getSampleData( "states-poly.txt");
+    final List<Shape> indexedShapes = new ArrayList<>();
+    while(indexedSpatialData.hasNext()) {
+      indexedShapes.add(indexedSpatialData.next().shape);
+    }
+    final Iterator<SpatialTestData> querySpatialData = getSampleData( "states-bbox.txt");
+    final List<Shape> queryShapes = new ArrayList<>();
+    while(querySpatialData.hasNext()) {
+      queryShapes.add(querySpatialData.next().shape);
+      queryShapes.add(randomQueryShape());
+    }
+    testOperation(SpatialOperation.Intersects, indexedShapes, queryShapes, random().nextBoolean());
   }
 
   //TODO move to a new test class?

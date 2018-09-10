@@ -60,7 +60,7 @@ import org.slf4j.LoggerFactory;
 
 public class LIRRollingUpdatesTest extends SolrCloudTestCase {
 
-  private static final Logger LOG = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
+  private static final Logger log = LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
   private static Map<URI, SocketProxy> proxies;
   private static Map<URI, JettySolrRunner> jettys;
@@ -79,7 +79,7 @@ public class LIRRollingUpdatesTest extends SolrCloudTestCase {
       cluster.stopJettySolrRunner(jetty);//TODO: Can we avoid this restart
       cluster.startJettySolrRunner(jetty);
       proxy.open(jetty.getBaseUrl().toURI());
-      LOG.info("Adding proxy for URL: " + jetty.getBaseUrl() + ". Proxy: " + proxy.getUrl());
+      log.info("Adding proxy for URL: " + jetty.getBaseUrl() + ". Proxy: " + proxy.getUrl());
       proxies.put(proxy.getUrl(), proxy);
       jettys.put(proxy.getUrl(), jetty);
     }
@@ -96,6 +96,8 @@ public class LIRRollingUpdatesTest extends SolrCloudTestCase {
   }
 
   @Test
+  // 12-Jun-2018 @BadApple(bugUrl="https://issues.apache.org/jira/browse/SOLR-12028") // 21-May-2018
+  @BadApple(bugUrl="https://issues.apache.org/jira/browse/SOLR-12028") // added 09-Aug-2018
   public void testNewReplicaOldLeader() throws Exception {
 
     String collection = "testNewReplicaOldLeader";
@@ -116,6 +118,8 @@ public class LIRRollingUpdatesTest extends SolrCloudTestCase {
         .setProperties(oldLir)
         .setNode(cluster.getJettySolrRunner(1).getNodeName())
         .process(cluster.getSolrClient());
+    waitForState("Time waiting for 1x2 collection", collection, clusterShape(1, 2));
+
     addDocs(collection, 2, 0);
 
     Slice shard1 = getCollectionState(collection).getSlice("shard1");
@@ -159,6 +163,9 @@ public class LIRRollingUpdatesTest extends SolrCloudTestCase {
     CollectionAdminRequest.deleteCollection(collection).process(cluster.getSolrClient());
   }
 
+  @Test
+  // 12-Jun-2018 @BadApple(bugUrl="https://issues.apache.org/jira/browse/SOLR-12028") // 04-May-2018
+  @BadApple(bugUrl="https://issues.apache.org/jira/browse/SOLR-12028") // added 09-Aug-2018
   public void testNewLeaderOldReplica() throws Exception {
     // in case of new leader & old replica, new leader can still put old replica into LIR
 
@@ -184,6 +191,7 @@ public class LIRRollingUpdatesTest extends SolrCloudTestCase {
         .setProperties(oldLir)
         .setNode(cluster.getJettySolrRunner(1).getNodeName())
         .process(cluster.getSolrClient());
+    waitForState("Time waiting for 1x2 collection", collection, clusterShape(1, 2));
 
     Slice shard1 = getCollectionState(collection).getSlice("shard1");
     Replica notLeader = shard1.getReplicas(x -> x != shard1.getLeader()).get(0);
@@ -254,6 +262,7 @@ public class LIRRollingUpdatesTest extends SolrCloudTestCase {
         .addReplicaToShard(collection, "shard1")
         .setNode(cluster.getJettySolrRunner(2).getNodeName())
         .process(cluster.getSolrClient());
+    waitForState("Timeout waiting for shard1 become active", collection, clusterShape(1, 3));
 
     Slice shard1 = getCollectionState(collection).getSlice("shard1");
     Replica replicaInOldMode = shard1.getReplicas(x -> x != shard1.getLeader()).get(0);
@@ -283,6 +292,10 @@ public class LIRRollingUpdatesTest extends SolrCloudTestCase {
     waitForState("Replica " + replicaInOldMode.getName() + " is not put as DOWN", collection,
         (liveNodes, collectionState) ->
             collectionState.getSlice("shard1").getReplica(finalReplicaInOldMode.getName()).getState() == Replica.State.DOWN);
+    Replica finalReplicaInNewMode = replicaInNewMode;
+    waitForState("Replica " + finalReplicaInNewMode.getName() + " is not put as DOWN", collection,
+        (liveNodes, collectionState) ->
+            collectionState.getSlice("shard1").getReplica(finalReplicaInNewMode.getName()).getState() == Replica.State.DOWN);
 
     // wait a little bit
     Thread.sleep(500);
@@ -321,11 +334,14 @@ public class LIRRollingUpdatesTest extends SolrCloudTestCase {
   }
 
   @Test
+  // 12-Jun-2018 @BadApple(bugUrl="https://issues.apache.org/jira/browse/SOLR-12028") // 04-May-2018
+  @BadApple(bugUrl="https://issues.apache.org/jira/browse/SOLR-12028") // added 09-Aug-2018
   public void testNewLeaderAndMixedReplicas() throws Exception {
     testLeaderAndMixedReplicas(false);
   }
 
   @Test
+  // 12-Jun-2018 @BadApple(bugUrl="https://issues.apache.org/jira/browse/SOLR-12028") // 04-May-2018
   public void testOldLeaderAndMixedReplicas() throws Exception {
     testLeaderAndMixedReplicas(true);
   }
