@@ -101,7 +101,8 @@ public class TestComplexPhraseQuery extends LuceneTestCase {
     checkMatches("\"dogs cigar*\"~2","7,8", synonym);
     // synonym is unidirectional
     checkMatches("\"dog cigar*\"~2","7", synonym);
-    
+    // synonym works for sub queries
+    checkMatches("\"(cats OR dogs) cigar\"","7", synonym);
   }
   
   public void testUnOrderedProximitySearches() throws Exception {

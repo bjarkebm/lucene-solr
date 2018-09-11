@@ -395,8 +395,9 @@ public class ComplexPhraseQueryParser extends QueryParser {
             stq = new SpanBoostQuery(stq, boost);
           }
           chosenList.add(stq);
-        } else if (childQuery instanceof BooleanQuery) {
-          BooleanQuery cbq = (BooleanQuery) childQuery;
+        } else if (childQuery instanceof BooleanQuery || childQuery instanceof SynonymQuery) {
+          BooleanQuery cbq = childQuery instanceof BooleanQuery ?
+              (BooleanQuery) childQuery : convert((SynonymQuery)childQuery);
           addComplexPhraseClause(chosenList, cbq);
         } else if (childQuery instanceof MatchNoDocsQuery) {
           // Insert fake term e.g. phrase query was for "Fred Smithe*" and
